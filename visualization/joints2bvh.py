@@ -1,14 +1,20 @@
-import visualization.Animation as Animation
 
-from visualization.InverseKinematics import BasicInverseKinematics, BasicJacobianIK, InverseKinematics
-from visualization.Quaternions import Quaternions
-import visualization.BVH_mod as BVH
-from visualization.remove_fs import *
+
+
+import numpy as np
+from . import Animation
+
+from . import  InverseKinematics
+from .InverseKinematics import BasicInverseKinematics, BasicJacobianIK, InverseKinematics
+from .Quaternions import Quaternions
+from visualization import BVH_mod as BVH
+from .remove_fs import *
 
 from utils.plot_script import plot_3d_motion
 from utils import paramUtil
 from common.skeleton import Skeleton
 import torch
+import os
 
 from torch import nn
 from visualization.utils.quat import ik_rot, between, fk, ik
@@ -36,6 +42,8 @@ class Joint2BVHConvertor:
 
         self.template_offset = self.template.offsets.copy()
         self.parents = [-1, 0, 1, 2, 3, 0, 5, 6, 7, 0, 9, 10, 11, 12, 11, 14, 15, 16, 11, 18, 19, 20]
+        self._fix_bvh_structure()
+
 
     def convert(self, positions, filename, iterations=10, foot_ik=True):
         '''
@@ -63,6 +71,7 @@ class Joint2BVHConvertor:
         if filename is not None:
             BVH.save(filename, new_anim, names=new_anim.names, frametime=1 / 20, order='zyx', quater=True)
         return new_anim, glb
+
 
     def convert_sgd(self, positions, filename, iterations=100, foot_ik=True):
         '''
@@ -113,6 +122,28 @@ class Joint2BVHConvertor:
         glb = Animation.positions_global(anim)[:, self.re_order_inv]
         return anim, glb
 
+
+    def _fix_bvh_structure(self):
+        """
+        `template.bvh` を修正して、修正後の `BVH` フォーマットに合わせる
+        """
+        # **HipsのOFFSETを修正**
+        self.template.offsets[0] = np.array([0.00000, 0.00000, 0.00000])  # Hipsの位置を修正
+
+        # **Jointの名前を変更**
+        rename_dict = {
+            "LeftUpLeg": "LHipJoint",
+            "RightUpLeg": "RHipJoint",
+            "Spine": "LowerBack",
+            "LeftToe": "LeftToeBase",
+            "RightToe": "RightToeBase",
+            "Head": "Neck1",
+        }
+
+        for i, name in enumerate(self.template.names):
+            if name in rename_dict:
+                self.template.names[i] = rename_dict[name]
+        print("modify template structure")
 
 
 if __name__ == "__main__":

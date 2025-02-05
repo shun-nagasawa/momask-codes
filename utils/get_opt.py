@@ -33,9 +33,15 @@ def get_opt(opt_path, device, **kwargs):
     skip = ('-------------- End ----------------',
             '------------ Options -------------',
             '\n')
+
     print('Reading', opt_path)
-    with open(opt_path, 'r') as f:
+
+    with open(opt_path, 'r', encoding="utf-8") as f:
         for line in f:
+            line = line.strip()
+            if not line or ':' not in line:  # 空行・不正な行をスキップ
+                continue
+
             if line.strip() not in skip:
                 # print(line.strip())
                 key, value = line.strip('\n').split(': ')

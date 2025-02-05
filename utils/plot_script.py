@@ -6,6 +6,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.animation import FuncAnimation, FFMpegFileWriter
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import mpl_toolkits.mplot3d.axes3d as p3
+from matplotlib.animation import PillowWriter
 
 
 COLORS = [[255, 0, 0], [255, 85, 0], [255, 170, 0], [255, 255, 0], [170, 255, 0], [85, 255, 0], [0, 255, 0],
@@ -407,8 +408,12 @@ def plot_3d_motion(save_path, kinematic_tree, joints, title, figsize=(10, 10), f
 
     ani = FuncAnimation(fig, update, frames=frame_number, interval=1000 / fps, repeat=False)
 
+    gif_save_path = save_path.replace(".mp4", ".gif")
+    ani.save(gif_save_path, writer=PillowWriter(fps=fps))
+    print(f"save gif path : {gif_save_path}")
+
     # writer = FFMpegFileWriter(fps=fps)
-    ani.save(save_path, fps=fps)
+    #ani.save(save_path, fps=fps)
     plt.close()
 
 

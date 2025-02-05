@@ -14,14 +14,13 @@ from utils.fixseed import fixseed
 from visualization.joints2bvh import Joint2BVHConvertor
 from torch.distributions.categorical import Categorical
 
-
 from utils.motion_process import recover_from_ric
 from utils.plot_script import plot_3d_motion
-
 from utils.paramUtil import t2m_kinematic_chain
 
 import numpy as np
 clip_version = 'ViT-B/32'
+
 
 def load_vq_model(vq_opt):
     # opt_path = pjoin(opt.checkpoints_dir, opt.dataset_name, opt.vq_name, 'opt.txt')
@@ -99,6 +98,144 @@ def load_len_estimator(opt):
     model.load_state_dict(ckpt['estimator'])
     print(f'Loading Length Estimator from epoch {ckpt["epoch"]}!')
     return model
+
+
+
+def generate_motion(text_prompt, bvh_output_path, gif_output_path):
+    """
+    指定されたプロンプトから BVH & GIF を生成
+    """
+
+    # 設定の読み込み
+    parser = EvalT2MOptions()
+    opt = parser.parse()
+    fixseed(opt.seed)
+
+    # デバイス設定
+    opt.device = torch.device("cpu" if opt.gpu_id == -1 else "cuda:" + str(opt.gpu_id))
+    torch.autograd.set_detect_anomaly(True)
+
+    dim_pose = 251 if opt.dataset_name == 'kit' else 263
+
+    # パスの設定
+    root_dir = os.path.join(opt.checkpoints_dir, opt.dataset_name, opt.name)
+    model_dir = os.path.join(root_dir, 'model')
+    result_dir = os.path.join('./generation', opt.ext)
+    joints_dir = os.path.join(result_dir, 'joints')
+    animation_dir = os.path.join(result_dir, 'animations')
+
+    os.makedirs(joints_dir, exist_ok=True)
+    os.makedirs(animation_dir, exist_ok=True)
+
+    # モデルの読み込み
+    model_opt_path = os.path.join(root_dir, 'opt.txt')
+    model_opt = get_opt(model_opt_path, device=opt.device)
+
+    vq_opt_path = os.path.join(opt.checkpoints_dir, opt.dataset_name, model_opt.vq_name, 'opt.txt')
+    vq_opt = get_opt(vq_opt_path, device=opt.device)
+    vq_opt.dim_pose = dim_pose
+    vq_model, vq_opt = load_vq_model(vq_opt)
+
+    model_opt.num_tokens = vq_opt.nb_code
+    model_opt.num_quantizers = vq_opt.num_quantizers
+    model_opt.code_dim = vq_opt.code_dim
+
+    res_opt_path = os.path.join(opt.checkpoints_dir, opt.dataset_name, opt.res_name, 'opt.txt')
+    res_opt = get_opt(res_opt_path, device=opt.device)
+    res_model = load_res_model(res_opt, vq_opt, opt)
+
+    print(f"🔍 opt.txt のパス: {res_opt_path}")
+
+    assert res_opt.vq_name == model_opt.vq_name
+
+    t2m_transformer = load_trans_model(model_opt, opt, 'latest.tar')
+    length_estimator = load_len_estimator(model_opt)
+
+    t2m_transformer.eval()
+    vq_model.eval()
+    res_model.eval()
+    length_estimator.eval()
+
+    res_model.to(opt.device)
+    t2m_transformer.to(opt.device)
+    vq_model.to(opt.device)
+    length_estimator.to(opt.device)
+
+    # データ変換
+    mean = np.load(os.path.join(opt.checkpoints_dir, opt.dataset_name, model_opt.vq_name, 'meta', 'mean.npy'))
+    std = np.load(os.path.join(opt.checkpoints_dir, opt.dataset_name, model_opt.vq_name, 'meta', 'std.npy'))
+
+    def inv_transform(data):
+        return data * std + mean
+
+    # テキストプロンプトを適用
+    prompt_list = [text_prompt]
+    length_list = []
+
+    est_length = False
+    if opt.motion_length == 0:
+        est_length = True
+    else:
+        length_list.append(opt.motion_length)
+
+    if est_length:
+        print("Since no motion length is specified, estimating motion length...")
+        text_embedding = t2m_transformer.encode_text(prompt_list)
+        pred_dis = length_estimator(text_embedding)
+        probs = F.softmax(pred_dis, dim=-1)
+        token_lens = Categorical(probs).sample()
+    else:
+        token_lens = torch.LongTensor(length_list) // 4
+        token_lens = token_lens.to(opt.device).long()
+
+    m_length = token_lens * 4
+    captions = prompt_list
+
+    sample = 0
+    kinematic_chain = t2m_kinematic_chain
+    converter = Joint2BVHConvertor()
+
+    for r in range(opt.repeat_times):
+        print(f"--> Repeat {r}")
+        with torch.no_grad():
+            mids = t2m_transformer.generate(
+                captions, token_lens, timesteps=opt.time_steps, cond_scale=opt.cond_scale,
+                temperature=opt.temperature, topk_filter_thres=opt.topkr, gsample=opt.gumbel_sample
+            )
+            mids = res_model.generate(mids, captions, token_lens, temperature=1, cond_scale=5)
+            pred_motions = vq_model.forward_decoder(mids)
+
+            pred_motions = pred_motions.detach().cpu().numpy()
+            data = inv_transform(pred_motions)
+
+        for k, (caption, joint_data) in enumerate(zip(captions, data)):
+            print(f"----> Sample {k}: {caption} {m_length[k]}")
+            animation_path = os.path.join(animation_dir, str(k))
+            joint_path = os.path.join(joints_dir, str(k))
+
+            os.makedirs(animation_path, exist_ok=True)
+            os.makedirs(joint_path, exist_ok=True)
+
+            joint_data = joint_data[:m_length[k]]
+            joint = recover_from_ric(torch.from_numpy(joint_data).float(), 22).numpy()
+
+            # BVH 書き出し
+            bvh_path = os.path.join(animation_path, f"sample{k}_repeat{r}_len{m_length[k]}.bvh")
+            _, joint = converter.convert(joint, filename=bvh_path, iterations=100, foot_ik=False)
+
+            # GIF 書き出し
+            gif_path = os.path.join(animation_path, f"sample{k}_repeat{r}_len{m_length[k]}.gif")
+            plot_3d_motion(gif_path, kinematic_chain, joint, title=caption, fps=20)
+
+            np.save(os.path.join(joint_path, f"sample{k}_repeat{r}_len{m_length[k]}.npy"), joint)
+
+            # 保存先を指定
+            os.rename(bvh_path, bvh_output_path)
+            os.rename(gif_path, gif_output_path)
+
+            print(f"✅ {bvh_output_path} と {gif_output_path} を保存しました。")
+
+
 
 
 if __name__ == '__main__':
