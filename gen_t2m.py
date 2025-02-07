@@ -101,7 +101,11 @@ def load_len_estimator(opt):
 
 
 
-def generate_motion(text_prompt, bvh_output_path, gif_output_path):
+def generate_motion(
+        text_prompt, bvh_output_path, gif_output_path,
+        cond_drop_prob=0.2, dropout=0.2, ff_size=1024, latent_dim=384,
+        max_motion_length=196, n_heads=6, n_layers=8, share_weight=True):
+
     """
     指定されたプロンプトから BVH & GIF を生成
     """
@@ -117,9 +121,9 @@ def generate_motion(text_prompt, bvh_output_path, gif_output_path):
 
     dim_pose = 251 if opt.dataset_name == 'kit' else 263
 
-    # パスの設定
+    # モデルの読み込み
     root_dir = os.path.join(opt.checkpoints_dir, opt.dataset_name, opt.name)
-    model_dir = os.path.join(root_dir, 'model')
+    #model_dir = os.path.join(root_dir, 'model')
     result_dir = os.path.join('./generation', opt.ext)
     joints_dir = os.path.join(result_dir, 'joints')
     animation_dir = os.path.join(result_dir, 'animations')
@@ -129,7 +133,30 @@ def generate_motion(text_prompt, bvh_output_path, gif_output_path):
 
     # モデルの読み込み
     model_opt_path = os.path.join(root_dir, 'opt.txt')
+
+    # **`opt.txt` は読み込みのみで変更しない**
     model_opt = get_opt(model_opt_path, device=opt.device)
+
+    # **Web UI のパラメータを直接 `model_opt` に適用**
+    model_opt.cond_drop_prob = cond_drop_prob
+    model_opt.dropout = dropout
+    model_opt.ff_size = ff_size
+    model_opt.latent_dim = latent_dim
+    model_opt.max_motion_length = max_motion_length
+    model_opt.n_heads = n_heads
+    model_opt.n_layers = n_layers
+    model_opt.share_weight = share_weight
+
+    print("🔍 Web UI のパラメータ適用確認:")
+    print(f" - cond_drop_prob: {model_opt.cond_drop_prob}")
+    print(f" - dropout: {model_opt.dropout}")
+    print(f" - ff_size: {model_opt.ff_size}")
+    print(f" - latent_dim: {model_opt.latent_dim}")
+    print(f" - max_motion_length: {model_opt.max_motion_length}")
+    print(f" - n_heads: {model_opt.n_heads}")
+    print(f" - n_layers: {model_opt.n_layers}")
+    print(f" - share_weight: {model_opt.share_weight}")
+
 
     vq_opt_path = os.path.join(opt.checkpoints_dir, opt.dataset_name, model_opt.vq_name, 'opt.txt')
     vq_opt = get_opt(vq_opt_path, device=opt.device)
